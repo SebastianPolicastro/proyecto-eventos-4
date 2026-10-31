@@ -1,6 +1,6 @@
 # Plataforma de Eventos e Inscripciones
 
-API REST para gestionar eventos e inscripciones. Este proyecto corresponde a Backend II: la base arquitectónica (Pre-entrega 1), el registro seguro de usuarios (Pre-entrega 2) y la autenticación con JWT y cookies (Pre-entrega 3), organizado por capas y listo para escalar.
+API REST para gestionar eventos e inscripciones. Este proyecto corresponde a Backend II: la base arquitectónica (Pre-entrega 1), el registro seguro de usuarios (Pre-entrega 2), la autenticación con JWT y cookies (Pre-entrega 3) y la centralización de la autenticación con Passport.js (Pre-entrega 4), organizado por capas y listo para escalar.
 
 **Temática elegida:** plataforma de eventos e inscripciones (con control de cupos, roles y notificaciones en próximas entregas).
 
@@ -9,6 +9,7 @@ API REST para gestionar eventos e inscripciones. Este proyecto corresponde a Bac
 - Node.js (módulos ESM)
 - Express
 - MongoDB con Mongoose
+- Passport.js (`passport`, `passport-local`, `passport-jwt`)
 - bcrypt (hash de contraseñas)
 - jsonwebtoken (JWT)
 - cookie-parser
@@ -17,8 +18,8 @@ API REST para gestionar eventos e inscripciones. Este proyecto corresponde a Bac
 ## Instalación
 
 ```bash
-git clone <https://github.com/SebastianPolicastro/proyecto-eventos-3>
-cd <proyecto-eventos-3>
+git clone <https://github.com/SebastianPolicastro/proyecto-eventos-4>
+cd <proyecto-eventos-4>
 npm install
 ```
 
@@ -56,22 +57,23 @@ npm run dev    # desarrollo, con recarga automática
 ```
 proyecto-eventos/
 ├── src/
-│   ├── app.js                       # configura Express (no levanta el server)
+│   ├── app.js                       # configura Express e inicializa Passport (no levanta el server)
 │   ├── server.js                    # conecta a MongoDB y levanta el servidor
 │   ├── config/
 │   │   ├── env.js                   # variables de entorno
-│   │   └── db.js                    # conexión a MongoDB
+│   │   ├── db.js                    # conexión a MongoDB
+│   │   └── passport.config.js       # estrategias de Passport (register, login, current)
 │   ├── routes/
 │   │   ├── health.router.js
 │   │   ├── events.router.js
-│   │   └── sessions.router.js
+│   │   └── sessions.router.js       # delega en passport.authenticate
 │   ├── controllers/
 │   │   ├── health.controller.js
 │   │   ├── events.controller.js
-│   │   └── sessions.controller.js   # register, login, current, logout
+│   │   └── sessions.controller.js   # genera el JWT y maneja la cookie
 │   ├── services/
 │   │   ├── events.service.js
-│   │   └── sessions.service.js      # validaciones, registro y login
+│   │   └── sessions.service.js      # validaciones, registro y validación de credenciales
 │   ├── repositories/
 │   │   ├── events.repository.js
 │   │   └── users.repository.js
@@ -82,10 +84,10 @@ proyecto-eventos/
 │   │   ├── User.js
 │   │   └── Event.js
 │   ├── middlewares/
-│   │   └── auth.middleware.js       # lee la cookie, verifica el JWT y carga req.user
+│   │   └── passport.middleware.js   # ejecuta una estrategia de Passport como middleware
 │   └── utils/
 │       ├── hash.js                  # bcrypt (hash y comparación)
-│       ├── jwt.js                   # firmar y verificar JWT
+│       ├── jwt.js                   # firma del JWT
 │       └── AppError.js              # error con código HTTP
 ├── .env.example
 ├── .gitignore
@@ -93,18 +95,34 @@ proyecto-eventos/
 └── README.md
 ```
 
-Flujo de una request: `routes → controllers → services → repositories → dao → models`.
+Flujo de una request: `routes → (Passport) → controllers → services → repositories → dao → models`.
+
+## Autenticación con Passport
+
+Passport se inicializa en `app.js` y todas las estrategias están centralizadas en `src/config/passport.config.js`. Ninguna usa sesiones: la autenticación es por JWT en una cookie.
+
+| Estrategia | Tipo           | Qué hace |
+|------------|----------------|----------|
+| `register` | passport-local | Valida los campos, normaliza el email, rechaza duplicados, hashea la contraseña con bcrypt y crea el usuario con rol `user`. La lógica está en `sessions.service.js` y la estrategia la ejecuta |
+| `login`    | passport-local | Valida las credenciales contra la base. Si algo no coincide, responde siempre "Credenciales inválidas" |
+| `current`  | passport-jwt   | Lee el JWT de la cookie `currentUser`, lo valida y deja `{ id, email, role }` en `req.user` |
+
+El JWT lo genera el controller de login (no Passport) con `utils/jwt.js`: contiene solo `id`, `email` y `role`, se firma con `JWT_SECRET` y vence según `JWT_EXPIRES_IN`. Se guarda en la cookie `currentUser` con `httpOnly`, `sameSite: lax`, duración de 1 hora y `secure` solo en producción.
+
+### Preparado para providers externos
+
+Las estrategias se registran desde un único objeto en `passport.config.js`. Para sumar un provider externo (Google, GitHub, etc.) alcanza con crear su estrategia y agregarla a ese objeto, sin tocar `app.js`. Las rutas lo usarían con `passportCall('nombre')`.
 
 ## Rutas disponibles
 
-| Método | Ruta                     | Descripción                                          | Auth |
-|--------|--------------------------|------------------------------------------------------|------|
-| GET    | `/api/health`            | Verifica que el servidor esté activo                 | No   |
-| GET    | `/api/events`            | Lista de eventos (vacía por ahora)                   | No   |
-| POST   | `/api/sessions/register` | Registro de usuarios                                 | No   |
-| POST   | `/api/sessions/login`    | Login, guarda el JWT en la cookie `currentUser`      | No   |
-| GET    | `/api/sessions/current`  | Devuelve el usuario autenticado                      | Sí   |
-| POST   | `/api/sessions/logout`   | Cierra la sesión eliminando la cookie                | No   |
+| Método | Ruta                     | Descripción                                          | Estrategia |
+|--------|--------------------------|------------------------------------------------------|------------|
+| GET    | `/api/health`            | Verifica que el servidor esté activo                 | No         |
+| GET    | `/api/events`            | Lista de eventos (vacía por ahora)                   | No         |
+| POST   | `/api/sessions/register` | Registro de usuarios                                 | `register` |
+| POST   | `/api/sessions/login`    | Login, guarda el JWT en la cookie `currentUser`      | `login`    |
+| GET    | `/api/sessions/current`  | Devuelve el usuario autenticado                      | `current`  |
+| POST   | `/api/sessions/logout`   | Cierra la sesión eliminando la cookie                | No         |
 
 ## Detalle de las rutas
 
@@ -180,13 +198,11 @@ Request:
 { "email": "ana@mail.com", "password": "Secreta123" }
 ```
 
-Respuesta `200`. Además setea la cookie `currentUser` con el JWT (`httpOnly`, `sameSite: lax`, duración de 1 hora, y `secure` solo en producción):
+Respuesta `200`. Además setea la cookie `currentUser` con el JWT:
 
 ```json
 { "status": "success", "message": "Login correcto" }
 ```
-
-El JWT se firma con `JWT_SECRET`, vence según `JWT_EXPIRES_IN` y contiene solo `id`, `email` y `role`.
 
 Respuesta `401` (el mensaje es el mismo si el email no existe o si la contraseña es incorrecta):
 
@@ -202,7 +218,7 @@ Respuesta `400` (falta email o password):
 
 ### GET /api/sessions/current
 
-Requiere la cookie `currentUser`. El middleware `auth` verifica el JWT y guarda el payload en `req.user`.
+Requiere la cookie `currentUser`. La estrategia `current` valida el JWT y deja el usuario en `req.user`.
 
 Respuesta `200`:
 
@@ -218,7 +234,7 @@ Respuesta `401` (sin cookie, o token inválido o expirado):
 
 ### POST /api/sessions/logout
 
-Elimina la cookie `currentUser`.
+Elimina la cookie `currentUser`. No pasa por Passport.
 
 Respuesta `200`:
 
@@ -231,4 +247,4 @@ Respuesta `200`:
 1. Tener MongoDB disponible y las variables configuradas en el `.env`.
 2. Levantar el servidor con `npm start` (debe mostrar `Conectado a MongoDB`).
 3. Usar Postman o Thunder Client, que guardan la cookie automáticamente entre requests.
-4. Casos a verificar: registro exitoso, login, `/current` con 200, logout y `/current` con 401; login con email inexistente; login con contraseña incorrecta; `/current` sin cookie; `/current` con un token manipulado o vencido.
+4. Casos a verificar: registro exitoso, registro con email duplicado, login, `/current` con 200, logout y `/current` con 401; login con credenciales inválidas; `/current` sin cookie y con un token manipulado.

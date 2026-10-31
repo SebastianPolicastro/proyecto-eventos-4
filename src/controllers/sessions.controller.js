@@ -1,5 +1,4 @@
-import * as sessionsService from '../services/sessions.service.js';
-import { AppError } from '../utils/AppError.js';
+import { signToken } from '../utils/jwt.js';
 import { env } from '../config/env.js';
 
 const COOKIE_NAME = 'currentUser';
@@ -10,33 +9,18 @@ const cookieOptions = {
   secure: env.NODE_ENV === 'production'
 };
 
-const handleError = (error, res) => {
-  if (error instanceof AppError) {
-    return res.status(error.status).json({ status: 'error', message: error.message });
-  }
-  console.error(error);
-  res.status(500).json({ status: 'error', message: 'Error interno del servidor' });
+export const register = (req, res) => {
+  res.status(201).json({ status: 'success', payload: req.user });
 };
 
-export const register = async (req, res) => {
-  try {
-    const user = await sessionsService.register(req.body ?? {});
-    res.status(201).json({ status: 'success', payload: user });
-  } catch (error) {
-    handleError(error, res);
-  }
-};
+export const login = (req, res) => {
+  const { id, email, role } = req.user;
+  const token = signToken({ id, email, role });
 
-export const login = async (req, res) => {
-  try {
-    const token = await sessionsService.login(req.body ?? {});
-    res
-      .cookie(COOKIE_NAME, token, { ...cookieOptions, maxAge: 3600000 })
-      .status(200)
-      .json({ status: 'success', message: 'Login correcto' });
-  } catch (error) {
-    handleError(error, res);
-  }
+  res
+    .cookie(COOKIE_NAME, token, { ...cookieOptions, maxAge: 3600000 })
+    .status(200)
+    .json({ status: 'success', message: 'Login correcto' });
 };
 
 export const current = (req, res) => {
